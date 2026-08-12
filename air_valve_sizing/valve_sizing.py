@@ -7,12 +7,13 @@ del punto y elegir el menor orificio nominal cuya capacidad cubra el
 caudal requerido.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Dict, List
 
 import numpy as np
 
-from hydraulics import m3s_to_gpm, pipe_area_m2
+from hydraulics import m3s_to_gpm, m_to_ft, pipe_area_m2
 from m51_tables import (
     TABLE_4_1,
     TABLE_4_1_DIAMETERS_IN,
@@ -88,6 +89,27 @@ def draining_sizing(diameter_m: float, drain_velocity_ms: float, delta_p_psi: fl
     q_drain_m3s = pipe_area_m2(diameter_m) * drain_velocity_ms
     q_drain_gpm = m3s_to_gpm(q_drain_m3s)
     q_scfm = q_drain_gpm * 0.134 * (delta_p_psi + 14.7) / 14.7
+    return select_orifice(TABLE_4_3_DRAINING, TABLE_LARGE_ORIFICE_DIAMETERS_IN, delta_p_psi, q_scfm)
+
+
+def gravity_flow_scfm(diameter_m: float, slope: float, manning_n: float) -> float:
+    """Caudal de flujo por gravedad en tuberia llena (formula de Manning),
+    metodo alternativo explicitamente autorizado por el M51 (pag. 28-32,
+    "Sizing for Gravity Flow") a la Fig. 4-1 / Ec. 4-6 para estimar el
+    ingreso de aire requerido en un vaciado por gravedad. Validado contra
+    el ejemplo numerico del propio manual (Estacion 10+00: S=0.04, D=24 in,
+    acero -> ~2,942 SCFM calculado vs. 3,000 SCFM del manual)."""
+    diameter_ft = m_to_ft(diameter_m)
+    area_ft2 = math.pi / 4 * diameter_ft**2
+    hydraulic_radius_ft = diameter_ft / 4
+    slope = max(slope, 0.0)
+    q_cfs = (1.486 / manning_n) * area_ft2 * hydraulic_radius_ft ** (2 / 3) * slope**0.5
+    return q_cfs * 60  # ft3/s -> SCFM
+
+
+def draining_result_from_scfm(q_scfm: float, delta_p_psi: float) -> SizingResult:
+    """Selecciona orificio de Tabla 4-3 a partir de un caudal ya calculado
+    (gobernante entre el metodo por velocidad y el de flujo por gravedad)."""
     return select_orifice(TABLE_4_3_DRAINING, TABLE_LARGE_ORIFICE_DIAMETERS_IN, delta_p_psi, q_scfm)
 
 

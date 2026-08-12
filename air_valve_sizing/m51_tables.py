@@ -92,3 +92,20 @@ HAZEN_WILLIAMS_C = {
 # (M51 pag. 24: 2% es la base habitual; 2-5% se sugiere para aguas con gases).
 DISSOLVED_AIR_PERCENT_OPTIONS = [0.2, 0.5, 0.7, 1.0, 2.0]
 DISSOLVED_AIR_PERCENT_DEFAULT = 2.0
+
+# Coeficiente de rugosidad de Manning por material, usado para estimar el
+# caudal de flujo por gravedad (M51 pag. 28-32, "Sizing for Gravity Flow")
+# en las crestas adyacentes a un desfogue. Es un coeficiente DISTINTO del de
+# Hazen-Williams (arriba): la Ec. 4-6 del M51 (Q=0.0472*C*S*ID^5, con C tipo
+# Chezy) no pudo verificarse de forma confiable a partir del texto extraido
+# del PDF (el resultado no reproducia el ejemplo numerico del propio manual),
+# por lo que se usa en su lugar la formula de Manning para tuberia llena
+# -explicitamente autorizada por el M51 como alternativa a la Fig. 4-1/Ec 4-6-
+# validada contra el ejemplo del manual (Estacion 10+00, S=0.04, D=24 in):
+# con n=0.012 arroja ~2,942 SCFM vs. los 3,000 SCFM del manual (~2% de error).
+MANNING_N_BY_MATERIAL = {
+    "PEAD (HDPE)": 0.009,
+    "PVC": 0.009,
+    "HD (Hierro Ductil)": 0.012,
+    "Acero": 0.012,
+}

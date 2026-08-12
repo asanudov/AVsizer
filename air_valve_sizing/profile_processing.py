@@ -1,10 +1,20 @@
 """
 Procesamiento del perfil de la conduccion: limpieza del CSV, simplificacion
 (Ramer-Douglas-Peucker) para perfiles con demasiados nodos, y localizacion
-de valvulas de aire segun las reglas del capitulo 3 del AWWA M51 (Fig. 3-1):
-quiebres de pendiente, puntos altos/bajos, tramos horizontales largos,
-ascensos/descensos largos (cada 400-800 m) y puntos altos adyacentes a
-desfogues/drenajes declarados por el usuario.
+de valvulas de aire segun tres criterios complementarios:
+
+1. AWWA M51 (2016), cap. 3, Fig. 3-1: quiebres de pendiente, puntos altos/bajos,
+   tramos horizontales largos, ascensos/descensos largos (cada 400-800 m).
+2. Pozos-Estrada et al. (2012, UNAM, Manual de analisis de la problematica del
+   aire atrapado en acueductos): puntos altos adyacentes a desfogues/drenajes
+   declarados por el usuario (sec. 1.5), y riesgo de arrastre de aire en
+   tramos descendentes mediante el parametro de gasto adimensional PGA =
+   Q^2/(g*D^5) comparado con la pendiente del tubo (sec. 3.2, Ec. 3.6).
+3. Wang et al. (2023, "Air valve arrangement criteria for preventing secondary
+   pipe bursts..."): dentro de un tramo descendente en riesgo (criterio 2),
+   si el desnivel acumulado supera el valor de control de vacio maximo tras
+   una rotura de tuberia (Ec. 9-11), se propone una valvula intermedia en el
+   punto mas critico del tramo.
 
 La simplificacion RDP se usa SOLO para decidir donde hay quiebres de
 pendiente relevantes; la elevacion de cada valvula sugerida siempre se
@@ -28,6 +38,7 @@ CATEGORY_PRIORITY = {
     "aumento_pendiente_bajada": 70,
     "disminucion_pendiente_subida": 70,
     "extremo_linea": 60,
+    "riesgo_arrastre_aire": 55,
     "periodico_ascenso": 40,
     "periodico_horizontal": 40,
     "periodico_descenso": 40,
@@ -75,10 +86,11 @@ def _rdp_keep_indices(x: np.ndarray, y: np.ndarray, tolerance: float) -> List[in
     return np.nonzero(keep)[0].tolist()
 
 
-DEFAULT_SLOPE_TOLERANCE_M = 0.5  # filtra ruido/redondeo tipico de topografia (p.ej. cotas a metro entero)
-DEFAULT_TARGET_VERTICES_PER_KM = 12.0  # densidad objetivo de vertices tras simplificar, independiente del muestreo del CSV
-MIN_TARGET_VERTICES = 15
+DEFAULT_SLOPE_TOLERANCE_M = 2.0  # filtra ruido/redondeo de topografia y quiebres de pendiente menores; subir = menos valvulas
+DEFAULT_TARGET_VERTICES_PER_KM = 3.0  # densidad objetivo de vertices tras simplificar, independiente del muestreo del CSV
+MIN_TARGET_VERTICES = 8
 MAX_TARGET_VERTICES = 250
+DEDUP_SPACING_M = 20.0  # distancia minima solo para evitar duplicados exactos (no es un parametro de diseno)
 
 
 def simplify_profile(
@@ -264,6 +276,70 @@ def assign_drain_crests(candidates: List[dict], full_df: pd.DataFrame, drain_cha
 
 
 # ---------------------------------------------------------------------------
+# Riesgo de arrastre de aire (PGA, Gonzalez y Pozos 2000 / UNAM Ec. 3.6) +
+# proteccion contra ondas de descompresion tras rotura (Wang et al. 2023,
+# Ec. 9-11), combinados igual que en la herramienta de referencia del
+# usuario: primero se identifican los TRAMOS DESCENDENTES donde el flujo no
+# tiene velocidad suficiente para arrastrar burbujas/bolsas de aire hacia
+# aguas abajo (parametro de gasto adimensional PGA = Q^2/(g*D^5) menor que
+# la pendiente S del tubo -> el aire puede migrar hacia aguas arriba y
+# acumularse). Solo dentro de esos tramos en riesgo, si el desnivel
+# acumulado supera el valor de control de vacio maximo tras una rotura
+# (tipicamente 8 m + recubrimiento de suelo), se propone una valvula
+# intermedia en el punto mas critico del tramo (mayor deficit S-PGA). Esto
+# evita agregar valvulas en tramos ascendentes u horizontales, que ya estan
+# cubiertos por las reglas del M51.
+# ---------------------------------------------------------------------------
+def identify_air_entrainment_risk_valves(
+    full_df: pd.DataFrame,
+    flow_m3s: float,
+    diameter_m: float,
+    delta_h_max_m: float = 8.0,
+    soil_cover_m: float = 0.0,
+) -> List[dict]:
+    g = 9.81
+    pga = (flow_m3s**2) / (g * diameter_m**5) if diameter_m > 0 else 0.0
+    threshold = delta_h_max_m + soil_cover_m
+
+    x = full_df["chainage_m"].to_numpy()
+    y = full_df["elevation_m"].to_numpy()
+    if len(x) < 3:
+        return []
+
+    slope = -np.diff(y) / np.diff(x)  # positivo = descendente en direccion del flujo (cadenamiento creciente)
+    en_riesgo = slope > pga
+    deficit = np.where(slope > 0, slope - pga, -np.inf)
+
+    extra = []
+    n = len(en_riesgo)
+    i = 0
+    while i < n:
+        if not en_riesgo[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and en_riesgo[j]:
+            j += 1
+        elevs = y[i : j + 1]
+        delta_h_real = float(elevs.max() - elevs.min())
+        if delta_h_real > threshold:
+            k = i + int(np.argmax(deficit[i:j]))
+            chainage_mid = float((x[k] + x[k + 1]) / 2)
+            elevation_mid = float(np.interp(chainage_mid, x, y))
+            extra.append(
+                {
+                    "chainage_m": chainage_mid,
+                    "elevation_m": elevation_mid,
+                    "category": "riesgo_arrastre_aire",
+                    "valve_type": "Combinacion",
+                    "source": "pga_wang",
+                }
+            )
+        i = j
+    return extra
+
+
+# ---------------------------------------------------------------------------
 # Fusion de puntos demasiado cercanos entre si
 # ---------------------------------------------------------------------------
 def merge_close_points(candidates: List[dict], min_spacing_m: float) -> List[dict]:
@@ -295,9 +371,12 @@ def build_valve_locations(
     is_impulsion: bool,
     drain_chainages: Optional[List[float]] = None,
     spacing_m: float = 500.0,
-    min_spacing_m: float = 50.0,
     slope_tolerance_m: float = DEFAULT_SLOPE_TOLERANCE_M,
     target_vertices_per_km: float = DEFAULT_TARGET_VERTICES_PER_KM,
+    delta_h_max_m: Optional[float] = None,
+    soil_cover_m: float = 0.0,
+    flow_m3s: Optional[float] = None,
+    diameter_m: Optional[float] = None,
 ) -> "tuple[pd.DataFrame, bool]":
     drain_chainages = drain_chainages or []
     simplified_df, was_simplified = simplify_profile(
@@ -325,7 +404,11 @@ def build_valve_locations(
     candidates.extend(insert_periodic_valves(full_df, boundary_chainages, spacing_m))
 
     candidates = assign_drain_crests(candidates, full_df, drain_chainages)
-    candidates = merge_close_points(candidates, min_spacing_m)
+    if delta_h_max_m is not None and flow_m3s is not None and diameter_m is not None:
+        candidates.extend(
+            identify_air_entrainment_risk_valves(full_df, flow_m3s, diameter_m, delta_h_max_m, soil_cover_m)
+        )
+    candidates = merge_close_points(candidates, DEDUP_SPACING_M)
     candidates.sort(key=lambda c: c["chainage_m"])
 
     result_df = pd.DataFrame(candidates)
