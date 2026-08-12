@@ -31,12 +31,7 @@ CATEGORY_LABELS = {
     "periodico_descenso": "Punto periódico — descenso largo",
 }
 
-MARKER_COLOR_BY_SOURCE = {
-    "quiebre_pendiente": PALETTE["deep"],
-    "descarga_bombeo": PALETTE["ok"],
-    "cresta_desfogue": PALETTE["warn"],
-    "periodico": PALETTE["light"],
-}
+SCFM_TO_M3H = 1.699011  # 1 SCFM = 0.0283168 m3/min * 60 min/hr
 
 
 def number_with_unit(label, default_value, units, default_unit, key, help_text=None, min_value=0.0):
@@ -44,6 +39,71 @@ def number_with_unit(label, default_value, units, default_unit, key, help_text=N
     value = col1.number_input(label, min_value=min_value, value=default_value, key=f"{key}_val", help=help_text)
     unit = col2.selectbox("unidad", units, index=units.index(default_unit), key=f"{key}_unit", label_visibility="visible")
     return value, unit
+
+
+def render_profile_chart(profile_df, hgl_series=None, valve_df=None, drain_points=None, height=440):
+    """Perfil + (opcional) línea de energía + marcadores de válvulas/desfogues,
+    con el eje Y autoescalado al rango real de los datos (sin forzar el 0)."""
+    y_values = [float(profile_df["elevation_m"].min()), float(profile_df["elevation_m"].max())]
+    if hgl_series is not None:
+        y_values += [float(np.min(hgl_series)), float(np.max(hgl_series))]
+    if valve_df is not None and not valve_df.empty:
+        y_values += [float(valve_df["Elevación (m)"].min()), float(valve_df["Elevación (m)"].max())]
+    if drain_points:
+        y_values += [p[1] for p in drain_points]
+    y_min, y_max = min(y_values), max(y_values)
+    pad = max((y_max - y_min) * 0.10, 1.0)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=profile_df["chainage_m"], y=profile_df["elevation_m"], mode="lines", name="Perfil / tubería",
+            line=dict(width=2.5, color=PALETTE["ink"]),
+        )
+    )
+    if hgl_series is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=profile_df["chainage_m"], y=hgl_series, mode="lines", name="Línea de energía (HGL)",
+                line=dict(width=2, color=PALETTE["primary"], dash="dot"),
+            )
+        )
+    if valve_df is not None and not valve_df.empty:
+        has_hover_info = "Tipo de válvula (Cap. 3 M51)" in valve_df.columns and "Presión de operación (psi)" in valve_df.columns
+        fig.add_trace(
+            go.Scatter(
+                x=valve_df["Cadenamiento (m)"], y=valve_df["Elevación (m)"], mode="markers",
+                name="Válvulas de aire propuestas",
+                marker=dict(size=11, color=PALETTE["deep"], symbol="diamond", line=dict(width=1, color="white")),
+                customdata=valve_df[["Tipo de válvula (Cap. 3 M51)", "Presión de operación (psi)"]] if has_hover_info else None,
+                hovertemplate=(
+                    "Cadenamiento: %{x:.0f} m<br>Elevación: %{y:.2f} m"
+                    + ("<br>%{customdata[0]}<br>P. operación: %{customdata[1]:.1f} psi" if has_hover_info else "")
+                    + "<extra></extra>"
+                ),
+            )
+        )
+    if drain_points:
+        fig.add_trace(
+            go.Scatter(
+                x=[p[0] for p in drain_points], y=[p[1] for p in drain_points], mode="markers",
+                name="Desfogues declarados",
+                marker=dict(size=13, color=PALETTE["warn"], symbol="triangle-down", line=dict(width=1, color="white")),
+                hovertemplate="Desfogue<br>Cadenamiento: %{x:.0f} m<br>Elevación: %{y:.2f} m<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        height=height,
+        margin=dict(t=30, b=10, l=10, r=10),
+        xaxis_title="Cadenamiento (m)",
+        yaxis_title="Elevación (m)",
+        yaxis=dict(range=[y_min - pad, y_max + pad]),
+        hovermode="closest",
+        legend=dict(orientation="h", y=1.15, x=0.5, xanchor="center"),
+        plot_bgcolor="white",
+    )
+    return fig
 
 
 st.title("Dimensionamiento y localización de válvulas de aire — AWWA M51")
@@ -124,6 +184,7 @@ if len(profile_df) < 3:
     st.stop()
 
 st.caption(f"{len(profile_df)} puntos válidos cargados, de {profile_df['chainage_m'].min():.0f} m a {profile_df['chainage_m'].max():.0f} m.")
+st.plotly_chart(render_profile_chart(profile_df, height=320), use_container_width=True)
 
 # ---------------------------------------------------------------------------
 # 2. Parámetros hidráulicos y de tubería
@@ -222,6 +283,7 @@ if submitted:
     gradient_j = hyd.hazen_williams_gradient(flow_m3s, diameter_m, c_hw)
 
     drain_chainages = [float(v) for v in drains_df["Cadenamiento (m)"].dropna().tolist()]
+    drain_points = [(d, hyd.elevation_at_chainage(profile_df, d)) for d in drain_chainages]
 
     locations_df, was_simplified = pp.build_valve_locations(
         profile_df,
@@ -250,15 +312,14 @@ if submitted:
         purge = vs.purge_sizing(flow_m3s, dissolved_air_pct, delta_p_purge_m)
         fill = vs.filling_sizing(diameter_m, fill_velocity_ms, delta_p_fill_psi)
         drain = vs.draining_sizing(diameter_m, drain_velocity_ms, delta_p_drain_psi)
-        governing_in = max(fill.diameter_in, drain.diameter_in)
+        governing_air_m3h = max(fill.required_scfm, drain.required_scfm) * SCFM_TO_M3H
 
         rows.append(
             {
                 "Cadenamiento (m)": chainage,
                 "Elevación (m)": elevation,
                 "Tipo de válvula (Cap. 3 M51)": CATEGORY_LABELS.get(r["category"], r["category"]),
-                "Ø Llenado/Vaciado (in)": governing_in,
-                "Ø Llenado/Vaciado (mm)": governing_in * 25.4,
+                "Caudal de aire llenado/vaciado (m³/hr)": governing_air_m3h,
                 "Ø Purga (in)": purge.diameter_in,
                 "Ø Purga (mm)": purge.diameter_in * 25.4,
                 "Presión de operación (mwc)": delta_p_purge_m,
@@ -266,8 +327,8 @@ if submitted:
                 "Presión de operación (psi)": delta_p_purge_m / hyd.HEAD_TO_M["psi"],
                 "HGL (m)": hgl_at_point,
                 "_source": r["source"],
-                "_fill_in": fill.diameter_in,
-                "_drain_in": drain.diameter_in,
+                "_fill_m3h": fill.required_scfm * SCFM_TO_M3H,
+                "_drain_m3h": drain.required_scfm * SCFM_TO_M3H,
                 "_fill_exceeds": fill.exceeds_largest,
                 "_drain_exceeds": drain.exceeds_largest,
                 "_purge_exceeds": purge.exceeds_largest,
@@ -287,6 +348,7 @@ if submitted:
         "was_simplified": was_simplified,
         "p_colapso": p_colapso,
         "delta_p_drain_psi": delta_p_drain_psi,
+        "drain_points": drain_points,
     }
 
 # ---------------------------------------------------------------------------
@@ -323,8 +385,7 @@ else:
             {
                 "Cadenamiento (m)": "{:.0f}",
                 "Elevación (m)": "{:.2f}",
-                "Ø Llenado/Vaciado (in)": "{:.3f}",
-                "Ø Llenado/Vaciado (mm)": "{:.1f}",
+                "Caudal de aire llenado/vaciado (m³/hr)": "{:.1f}",
                 "Ø Purga (in)": "{:.3f}",
                 "Ø Purga (mm)": "{:.1f}",
                 "Presión de operación (mwc)": "{:.1f}",
@@ -358,57 +419,22 @@ else:
     st.download_button("⬇ Descargar tabla de resultados (.csv)", csv_bytes, file_name="valvulas_aire_M51.csv", mime="text/csv")
 
     with st.expander("Detalle de cálculo por punto (llenado vs. vaciado por separado)"):
-        detail_df = results_df[["Cadenamiento (m)", "_fill_in", "_drain_in"]].rename(
-            columns={"_fill_in": "Ø Llenado (in)", "_drain_in": "Ø Vaciado (in)"}
+        detail_df = results_df[["Cadenamiento (m)", "_fill_m3h", "_drain_m3h"]].rename(
+            columns={"_fill_m3h": "Caudal llenado (m³/hr)", "_drain_m3h": "Caudal vaciado (m³/hr)"}
         )
-        st.dataframe(detail_df.style.format({"Cadenamiento (m)": "{:.0f}", "Ø Llenado (in)": "{:.3f}", "Ø Vaciado (in)": "{:.3f}"}), use_container_width=True)
+        st.dataframe(
+            detail_df.style.format({"Cadenamiento (m)": "{:.0f}", "Caudal llenado (m³/hr)": "{:.1f}", "Caudal vaciado (m³/hr)": "{:.1f}"}),
+            use_container_width=True,
+        )
 
     # -----------------------------------------------------------------
-    # Gráfico: perfil + línea de energía + válvulas
+    # Gráfico: perfil + línea de energía + válvulas + desfogues
     # -----------------------------------------------------------------
     st.subheader("Perfil, línea de energía (HGL) y válvulas sugeridas")
 
     hgl_full = hyd.build_hgl(profile_df["chainage_m"].to_numpy(), state["hgl_start_m"], state["gradient_j"])
 
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=profile_df["chainage_m"], y=profile_df["elevation_m"], mode="lines", name="Perfil / tubería",
-            line=dict(width=2.5, color=PALETTE["ink"]), fill="tozeroy", fillcolor="rgba(11,41,66,0.06)",
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=profile_df["chainage_m"], y=hgl_full, mode="lines", name="Línea de energía (HGL)",
-            line=dict(width=2, color=PALETTE["primary"], dash="dot"),
-        )
-    )
-
-    for source, color in MARKER_COLOR_BY_SOURCE.items():
-        subset = results_df[results_df["_source"] == source]
-        if subset.empty:
-            continue
-        fig.add_trace(
-            go.Scatter(
-                x=subset["Cadenamiento (m)"], y=subset["Elevación (m)"], mode="markers",
-                name=source.replace("_", " ").capitalize(),
-                marker=dict(size=11, color=color, line=dict(width=1, color="white"), symbol="diamond"),
-                customdata=subset[["Tipo de válvula (Cap. 3 M51)", "Presión de operación (psi)", "Ø Llenado/Vaciado (in)", "Ø Purga (in)"]],
-                hovertemplate=(
-                    "Cadenamiento: %{x:.0f} m<br>Elevación: %{y:.2f} m<br>%{customdata[0]}<br>"
-                    "P. operación: %{customdata[1]:.1f} psi<br>Ø Llenado/Vaciado: %{customdata[2]:.2f} in<br>"
-                    "Ø Purga: %{customdata[3]:.2f} in<extra></extra>"
-                ),
-            )
-        )
-
-    fig.update_layout(
-        height=520,
-        margin=dict(t=30, b=10, l=10, r=10),
-        xaxis_title="Cadenamiento (m)",
-        yaxis_title="Elevación (m)",
-        hovermode="closest",
-        legend=dict(orientation="h", y=1.1, x=0.5, xanchor="center"),
-        plot_bgcolor="white",
+    fig = render_profile_chart(
+        profile_df, hgl_series=hgl_full, valve_df=results_df, drain_points=state.get("drain_points"), height=520
     )
     st.plotly_chart(fig, use_container_width=True)
