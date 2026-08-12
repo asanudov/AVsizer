@@ -26,6 +26,7 @@ from typing import List, Optional
 
 import numpy as np
 import pandas as pd
+from scipy.signal import find_peaks
 
 HORIZONTAL_EPS = 0.001  # m/m (~0.1%)-> por debajo de esto se considera "horizontal"
 
@@ -200,6 +201,36 @@ def classify_breakpoints(simplified_df: pd.DataFrame, eps: float = HORIZONTAL_EP
 
 
 # ---------------------------------------------------------------------------
+# Deteccion de picos geometricos reales sobre el perfil COMPLETO (no el
+# simplificado), como respaldo de classify_breakpoints: la simplificacion RDP
+# filtra quiebres por debajo de la tolerancia elegida, lo que puede omitir
+# picos locales genuinos pero de poca altura (p.ej. cerca del final de la
+# linea). Se usa scipy.signal.find_peaks con una prominencia igual al
+# diametro de la tuberia: un abultamiento del perfil menor a un diametro no
+# alcanza a formar una bolsa de aire relevante, mientras que uno mayor si
+# constituye un punto alto real que el M51 exige atender (Fig. 3-1).
+# ---------------------------------------------------------------------------
+def identify_geometric_peaks(full_df: pd.DataFrame, diameter_m: float) -> List[dict]:
+    if diameter_m is None or diameter_m <= 0:
+        return []
+    y = full_df["elevation_m"].to_numpy()
+    x = full_df["chainage_m"].to_numpy()
+    if len(y) < 3:
+        return []
+    peak_idx, _ = find_peaks(y, prominence=diameter_m)
+    return [
+        {
+            "chainage_m": float(x[i]),
+            "elevation_m": float(y[i]),
+            "category": "punto_alto",
+            "valve_type": "Combinacion",
+            "source": "pico_geometrico",
+        }
+        for i in peak_idx
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Insercion de valvulas periodicas a lo largo de tramos largos
 # ---------------------------------------------------------------------------
 def insert_periodic_valves(
@@ -290,6 +321,32 @@ def assign_drain_crests(candidates: List[dict], full_df: pd.DataFrame, drain_cha
 # evita agregar valvulas en tramos ascendentes u horizontales, que ya estan
 # cubiertos por las reglas del M51.
 # ---------------------------------------------------------------------------
+def pga_value(flow_m3s: float, diameter_m: float) -> float:
+    """Parametro de gasto adimensional PGA = Q^2/(g*D^5) (Gonzalez y Pozos
+    2000, UNAM Ec. 3.6)."""
+    g = 9.81
+    return (flow_m3s**2) / (g * diameter_m**5) if diameter_m > 0 else 0.0
+
+
+def compute_pga_risk_segments(
+    full_df: pd.DataFrame, flow_m3s: float, diameter_m: float
+) -> List["tuple[float, float, float, float]"]:
+    """Devuelve los segmentos (x0,y0,x1,y1) del perfil completo donde la
+    pendiente descendente supera al PGA (riesgo de que el flujo no arrastre
+    el aire hacia aguas abajo), para resaltarlos visualmente."""
+    pga = pga_value(flow_m3s, diameter_m)
+    x = full_df["chainage_m"].to_numpy()
+    y = full_df["elevation_m"].to_numpy()
+    if len(x) < 2:
+        return []
+    slope = -np.diff(y) / np.diff(x)
+    return [
+        (float(x[i]), float(y[i]), float(x[i + 1]), float(y[i + 1]))
+        for i in range(len(slope))
+        if slope[i] > pga
+    ]
+
+
 def identify_air_entrainment_risk_valves(
     full_df: pd.DataFrame,
     flow_m3s: float,
@@ -297,8 +354,7 @@ def identify_air_entrainment_risk_valves(
     delta_h_max_m: float = 8.0,
     soil_cover_m: float = 0.0,
 ) -> List[dict]:
-    g = 9.81
-    pga = (flow_m3s**2) / (g * diameter_m**5) if diameter_m > 0 else 0.0
+    pga = pga_value(flow_m3s, diameter_m)
     threshold = delta_h_max_m + soil_cover_m
 
     x = full_df["chainage_m"].to_numpy()
@@ -384,6 +440,8 @@ def build_valve_locations(
     )
 
     candidates = classify_breakpoints(simplified_df)
+    if diameter_m is not None:
+        candidates.extend(identify_geometric_peaks(full_df, diameter_m))
 
     x_start = float(full_df["chainage_m"].iloc[0])
     x_end = float(full_df["chainage_m"].iloc[-1])
