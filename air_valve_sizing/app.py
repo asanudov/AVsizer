@@ -11,7 +11,7 @@ import valve_sizing as vs
 from m51_tables import DISSOLVED_AIR_PERCENT_DEFAULT, DISSOLVED_AIR_PERCENT_OPTIONS, HAZEN_WILLIAMS_C, MANNING_N_BY_MATERIAL
 from styling import PALETTE, inject_theme
 
-st.set_page_config(page_title="Dimensionamiento de Válvulas de Aire — AWWA M51", layout="wide", page_icon="💧")
+st.set_page_config(page_title="AVSizer App | Dimensionamiento y Localización de Válvulas de admisión y Expulsión de aire", layout="wide", page_icon="💧")
 inject_theme()
 
 HEAD_UNITS = ["mwc", "bar", "psi", "kg/cm2"]
