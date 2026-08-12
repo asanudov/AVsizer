@@ -26,24 +26,6 @@ def _font_base64(filename: str) -> str:
     return base64.b64encode((ASSETS_DIR / filename).read_bytes()).decode("utf-8")
 
 
-# Pictograma de valvula de aire en estilo de linea/contorno (esquema tipo
-# plano): cuerpo achaflanado con una tapa/salida lateral del mismo estilo
-# (rectangulo achaflanado, a menor escala) y el tramo de tuberia debajo.
-# Aprobado por el usuario tras iteracion visual. Usado como icono de los
-# puntos sugeridos en el grafico.
-_VALVE_ICON_SVG = f"""
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <g fill="none" stroke="{PALETTE["deep"]}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round">
-    <path d="M27 18 L46 18 L46 48 L20 48 L20 25 Z"/>
-    <path d="M47 6 L58 6 L58 20 L43 20 L43 10 Z"/>
-    <path d="M33 48 L33 60"/>
-  </g>
-</svg>
-""".strip()
-
-VALVE_ICON_DATA_URI = "data:image/svg+xml;base64," + base64.b64encode(_VALVE_ICON_SVG.encode("utf-8")).decode("utf-8")
-
-
 def inject_theme() -> None:
     medium_b64 = _font_base64("SpaceGrotesk-Medium.ttf")
     bold_b64 = _font_base64("SpaceGrotesk-Bold.ttf")
