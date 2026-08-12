@@ -9,7 +9,7 @@ import hydraulics as hyd
 import profile_processing as pp
 import valve_sizing as vs
 from m51_tables import DISSOLVED_AIR_PERCENT_DEFAULT, DISSOLVED_AIR_PERCENT_OPTIONS, HAZEN_WILLIAMS_C, MANNING_N_BY_MATERIAL
-from styling import PALETTE, inject_theme
+from styling import PALETTE, VALVE_ICON_DATA_URI, inject_theme
 
 st.set_page_config(page_title="Dimensionamiento de Válvulas de Aire — AWWA M51", layout="wide", page_icon="💧")
 inject_theme()
@@ -42,7 +42,7 @@ def number_with_unit(label, default_value, units, default_unit, key, help_text=N
     return value, unit
 
 
-def render_profile_chart(profile_df, hgl_series=None, valve_df=None, drain_points=None, height=440):
+def render_profile_chart(profile_df, hgl_series=None, valve_df=None, drain_points=None, risk_segments=None, height=440):
     """Perfil + (opcional) línea de energía + marcadores de válvulas/desfogues,
     con el eje Y autoescalado al rango real de los datos (sin forzar el 0)."""
     y_values = [float(profile_df["elevation_m"].min()), float(profile_df["elevation_m"].max())]
@@ -69,13 +69,24 @@ def render_profile_chart(profile_df, hgl_series=None, valve_df=None, drain_point
                 line=dict(width=2, color=PALETTE["primary"], dash="dot"),
             )
         )
+    if risk_segments:
+        for i, (x0, y0, x1, y1) in enumerate(risk_segments):
+            fig.add_trace(
+                go.Scatter(
+                    x=[x0, x1], y=[y0, y1], mode="lines",
+                    line=dict(width=4, color=PALETTE["alert"]),
+                    name="Riesgo de arrastre de aire (PGA)", legendgroup="riesgo_pga",
+                    showlegend=(i == 0),
+                    hoverinfo="skip",
+                )
+            )
     if valve_df is not None and not valve_df.empty:
         has_hover_info = "Tipo de válvula (Cap. 3 M51)" in valve_df.columns and "Presión de operación (psi)" in valve_df.columns
         fig.add_trace(
             go.Scatter(
                 x=valve_df["Cadenamiento (m)"], y=valve_df["Elevación (m)"], mode="markers",
                 name="Válvulas de aire propuestas",
-                marker=dict(size=11, color=PALETTE["deep"], symbol="diamond", line=dict(width=1, color="white")),
+                marker=dict(size=16, color="rgba(0,0,0,0)", line=dict(width=0)),
                 customdata=valve_df[["Tipo de válvula (Cap. 3 M51)", "Presión de operación (psi)"]] if has_hover_info else None,
                 hovertemplate=(
                     "Cadenamiento: %{x:.0f} m<br>Elevación: %{y:.2f} m"
@@ -84,6 +95,18 @@ def render_profile_chart(profile_df, hgl_series=None, valve_df=None, drain_point
                 ),
             )
         )
+        x_range = float(profile_df["chainage_m"].max() - profile_df["chainage_m"].min()) or 1.0
+        y_range_padded = (y_max + pad) - (y_min - pad)
+        sizex = max(x_range * 0.028, 1.0)
+        sizey = max(y_range_padded * 0.11, 0.1)
+        for _, row in valve_df.iterrows():
+            fig.add_layout_image(
+                dict(
+                    source=VALVE_ICON_DATA_URI, xref="x", yref="y",
+                    x=row["Cadenamiento (m)"], y=row["Elevación (m)"],
+                    sizex=sizex, sizey=sizey, xanchor="center", yanchor="middle", layer="above",
+                )
+            )
     if drain_points:
         fig.add_trace(
             go.Scatter(
@@ -377,6 +400,7 @@ if submitted:
                 "Elevación (m)": elevation,
                 "Tipo de válvula (Cap. 3 M51)": CATEGORY_LABELS.get(r["category"], r["category"]),
                 "Caudal de aire llenado/vaciado (m³/hr)": governing_air_m3h,
+                "Caudal de purga (m³/hr)": purge.required_scfm * SCFM_TO_M3H,
                 "Ø Purga (in)": purge.diameter_in,
                 "Ø Purga (mm)": purge.diameter_in * 25.4,
                 "Presión de operación (mwc)": delta_p_purge_m,
@@ -395,6 +419,7 @@ if submitted:
         )
 
     results_df = pd.DataFrame(rows)
+    risk_segments = pp.compute_pga_risk_segments(profile_df, flow_m3s, diameter_m)
 
     st.session_state["results"] = {
         "results_df": results_df,
@@ -406,6 +431,7 @@ if submitted:
         "p_colapso": p_colapso,
         "delta_p_drain_psi": delta_p_drain_psi,
         "drain_points": drain_points,
+        "risk_segments": risk_segments,
     }
 
 # ---------------------------------------------------------------------------
@@ -443,6 +469,7 @@ else:
                 "Cadenamiento (m)": "{:.0f}",
                 "Elevación (m)": "{:.2f}",
                 "Caudal de aire llenado/vaciado (m³/hr)": "{:.1f}",
+                "Caudal de purga (m³/hr)": "{:.2f}",
                 "Ø Purga (in)": "{:.3f}",
                 "Ø Purga (mm)": "{:.1f}",
                 "Presión de operación (mwc)": "{:.1f}",
@@ -492,9 +519,16 @@ else:
     hgl_full = hyd.build_hgl(profile_df["chainage_m"].to_numpy(), state["hgl_start_m"], state["gradient_j"])
 
     fig = render_profile_chart(
-        profile_df, hgl_series=hgl_full, valve_df=results_df, drain_points=state.get("drain_points"), height=520
+        profile_df, hgl_series=hgl_full, valve_df=results_df, drain_points=state.get("drain_points"),
+        risk_segments=state.get("risk_segments"), height=520,
     )
     st.plotly_chart(fig, use_container_width=True)
+    if state.get("risk_segments"):
+        st.caption(
+            "🔴 Tramos en rojo: pendiente descendente donde el parámetro de gasto adimensional (PGA = Q²/(g·D⁵)) "
+            "es menor que la pendiente del tubo — el flujo no alcanza velocidad suficiente para arrastrar el aire "
+            "hacia aguas abajo (UNAM, Ec. 3.6)."
+        )
 
 # ---------------------------------------------------------------------------
 # Referencias técnicas
