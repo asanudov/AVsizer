@@ -36,16 +36,16 @@ SCFM_TO_M3H = 1.699011  # 1 SCFM = 0.0283168 m3/min * 60 min/hr
 
 PRESSURE_UNITS = ["mwc", "bar", "psi"]
 
-# Pictograma de valvula de aire (mismo diseno que styling.VALVE_ICON_DATA_URI)
-# como shape de Plotly en modo pixel (xsizemode/ysizemode="pixel"): el ancla
-# (xanchor, yanchor) se ubica en el cadenamiento/elevacion real del punto y
-# el path se dibuja en offsets de PIXELES fijos desde ahi, para que el icono
-# no se deforme al hacer zoom y su base (el extremo inferior del tallo)
-# quede siempre plantada exactamente sobre la linea del perfil.
+# Pictograma de valvula de aire como shape de Plotly en modo pixel
+# (xsizemode/ysizemode="pixel"): el ancla (xanchor, yanchor) se ubica en el
+# cadenamiento/elevacion real del punto y el path se dibuja en offsets de
+# PIXELES fijos desde ahi (Plotly usa +y hacia arriba en este modo), para que
+# el icono no se deforme al hacer zoom y su base (el extremo inferior del
+# tallo) quede siempre plantada exactamente sobre la linea del perfil.
 VALVE_ICON_SHAPE_PATH = (
-    "M -3.3,-23.1 L 7.15,-23.1 L 7.15,-6.6 L -7.15,-6.6 L -7.15,-19.25 Z "
-    "M 7.7,-29.7 L 13.75,-29.7 L 13.75,-22.0 L 5.5,-22.0 L 5.5,-27.5 Z "
-    "M 0,-6.6 L 0,0"
+    "M -1.98,13.86 L 4.29,13.86 L 4.29,3.96 L -4.29,3.96 L -4.29,11.55 Z "
+    "M 4.62,17.82 L 8.25,17.82 L 8.25,13.2 L 3.3,13.2 L 3.3,16.5 Z "
+    "M 0,3.96 L 0,0"
 )
 
 
