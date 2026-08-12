@@ -26,7 +26,7 @@ CATEGORY_LABELS = {
     "disminucion_pendiente_subida": "Disminución de pendiente en subida",
     "descarga_bombeo": "Descarga de bombeo",
     "extremo_linea": "Extremo de línea (adyacente a desfogue)",
-    "riesgo_arrastre_aire": "Riesgo de arrastre de aire (PGA, UNAM) + descompresión (Wang et al. 2023)",
+    "punto_alto_pga": "Punto alto / PGA",
     "periodico_ascenso": "Punto periódico — ascenso largo",
     "periodico_horizontal": "Punto periódico — tramo horizontal",
     "periodico_descenso": "Punto periódico — descenso largo",
@@ -324,15 +324,24 @@ with st.form("parametros_form"):
         espesor_val, espesor_unit = number_with_unit("Espesor de pared", 6.0, ["mm", "in"], "mm", "espesor", min_value=0.01)
         factor_seguridad = col_sf.number_input("Factor de seguridad", value=4.0, min_value=2.0, max_value=6.0, step=0.5)
 
-    with st.expander("Avanzado: riesgo de arrastre de aire + descompresión tras rotura (UNAM + Wang et al. 2023)"):
+    with st.expander("Avanzado: riesgo de arrastre de aire (UNAM) y válvulas por rotura en puntos bajos (Wang et al. 2023)"):
         st.caption(
-            "Identifica tramos descendentes donde el flujo no alcanza velocidad suficiente para arrastrar aire "
-            "hacia aguas abajo (parámetro de gasto adimensional PGA = Q²/(g·D⁵) menor que la pendiente del tubo, "
-            "UNAM Ec. 3.6). Dentro de esos tramos, si el desnivel acumulado supera el valor de control de vacío "
-            "tras una rotura de tubería (Wang et al. 2023, Ec. 9-11), se agrega una válvula intermedia en el punto "
-            "más crítico. Solo actúa sobre tramos realmente en riesgo, no sobre todo el perfil."
+            "Son dos análisis independientes, actívelos por separado según lo que necesite ver."
         )
-        usar_wang = st.checkbox("Activar verificación de riesgo de arrastre de aire", value=False)
+        usar_pga_visual = st.checkbox(
+            "Analizar riesgo de arrastre de aire (PGA) — resalta en rojo los tramos descendentes donde el flujo no "
+            "alcanza velocidad suficiente para arrastrar el aire hacia aguas abajo (parámetro de gasto adimensional "
+            "PGA = Q²/(g·D⁵) menor que la pendiente del tubo, UNAM Ec. 3.6). Solo diagnóstico visual, no agrega "
+            "válvulas.",
+            value=False,
+        )
+        st.markdown("---")
+        usar_wang = st.checkbox(
+            "Agregar válvulas intermedias por riesgo de rotura en puntos bajos (Wang et al. 2023) — dentro de los "
+            "tramos en riesgo de arrastre de aire, si el desnivel acumulado supera el valor de control de vacío "
+            "tras una rotura de tubería (Ec. 9-11), propone una válvula intermedia al inicio del tramo.",
+            value=False,
+        )
         col_dh, col_sc = st.columns(2)
         delta_h_max_m = col_dh.number_input("ΔH máx. de control de vacío (m)", value=8.0, min_value=1.0, help="Valor típico según Wang et al. (2023).")
         soil_cover_m = col_sc.number_input("Recubrimiento de suelo si es enterrada (m)", value=0.0, min_value=0.0)
@@ -438,7 +447,7 @@ if submitted:
         )
 
     results_df = pd.DataFrame(rows)
-    risk_segments = pp.compute_pga_risk_segments(profile_df, flow_m3s, diameter_m)
+    risk_segments = pp.compute_pga_risk_segments(profile_df, flow_m3s, diameter_m) if usar_pga_visual else []
 
     st.session_state["results"] = {
         "results_df": results_df,

@@ -33,13 +33,13 @@ HORIZONTAL_EPS = 0.001  # m/m (~0.1%)-> por debajo de esto se considera "horizon
 # Prioridad para desempate al fusionar puntos muy cercanos (mayor = mas importante)
 CATEGORY_PRIORITY = {
     "descarga_bombeo": 100,
+    "punto_alto_pga": 95,
     "punto_alto": 90,
     "fin_tramo_horizontal": 80,
     "inicio_tramo_horizontal": 80,
     "aumento_pendiente_bajada": 70,
     "disminucion_pendiente_subida": 70,
     "extremo_linea": 60,
-    "riesgo_arrastre_aire": 55,
     "periodico_ascenso": 40,
     "periodico_horizontal": 40,
     "periodico_descenso": 40,
@@ -230,6 +230,35 @@ def identify_geometric_peaks(full_df: pd.DataFrame, diameter_m: float) -> List[d
     ]
 
 
+PEAK_MERGE_DISTANCE_M = 150.0  # picos altos separados por menos de esto se tratan como una sola cresta
+
+
+def consolidate_nearby_peaks(candidates: List[dict], merge_distance_m: float = PEAK_MERGE_DISTANCE_M) -> List[dict]:
+    """Cuando dos o mas 'punto_alto' quedan muy cerca entre si (p.ej. un
+    pequeno valle intermedio sin desfogue declarado), el M51 no exige una
+    valvula en cada uno: se conserva solo el mas alto del grupo. Los puntos
+    altos ya asociados a un desfogue (needs_drain_sizing) no se tocan, ya
+    que ahi la ubicacion viene dada por la cresta relevante para ese
+    desfogue, no por prominencia geometrica."""
+    is_free_peak = lambda c: c["category"] == "punto_alto" and not c.get("needs_drain_sizing")
+    peaks = sorted([c for c in candidates if is_free_peak(c)], key=lambda c: c["chainage_m"])
+    others = [c for c in candidates if not is_free_peak(c)]
+    if len(peaks) < 2:
+        return candidates
+
+    consolidated = []
+    i = 0
+    while i < len(peaks):
+        cluster = [peaks[i]]
+        j = i + 1
+        while j < len(peaks) and peaks[j]["chainage_m"] - cluster[-1]["chainage_m"] <= merge_distance_m:
+            cluster.append(peaks[j])
+            j += 1
+        consolidated.append(max(cluster, key=lambda c: c["elevation_m"]))
+        i = j
+    return others + consolidated
+
+
 # ---------------------------------------------------------------------------
 # Insercion de valvulas periodicas a lo largo de tramos largos
 # ---------------------------------------------------------------------------
@@ -314,12 +343,16 @@ def assign_drain_crests(candidates: List[dict], full_df: pd.DataFrame, drain_cha
 # tiene velocidad suficiente para arrastrar burbujas/bolsas de aire hacia
 # aguas abajo (parametro de gasto adimensional PGA = Q^2/(g*D^5) menor que
 # la pendiente S del tubo -> el aire puede migrar hacia aguas arriba y
-# acumularse). Solo dentro de esos tramos en riesgo, si el desnivel
+# acumularse). Los tramos en riesgo separados por menos de
+# PEAK_MERGE_DISTANCE_M se agrupan en un solo cluster (dos "tramos rojos"
+# cercanos cuentan como uno). Dentro de cada cluster, si el desnivel
 # acumulado supera el valor de control de vacio maximo tras una rotura
-# (tipicamente 8 m + recubrimiento de suelo), se propone una valvula
-# intermedia en el punto mas critico del tramo (mayor deficit S-PGA). Esto
-# evita agregar valvulas en tramos ascendentes u horizontales, que ya estan
-# cubiertos por las reglas del M51.
+# (tipicamente 8 m + recubrimiento de suelo), se propone UNA valvula en el
+# INICIO del primer tramo en riesgo del cluster (aguas arriba de donde
+# comienza el riesgo), no en un punto intermedio: esa es la ubicacion que
+# realmente intercepta el aire antes de que se acumule. Esto evita agregar
+# valvulas en tramos ascendentes u horizontales, que ya estan cubiertos por
+# las reglas del M51.
 # ---------------------------------------------------------------------------
 def pga_value(flow_m3s: float, diameter_m: float) -> float:
     """Parametro de gasto adimensional PGA = Q^2/(g*D^5) (Gonzalez y Pozos
@@ -353,6 +386,7 @@ def identify_air_entrainment_risk_valves(
     diameter_m: float,
     delta_h_max_m: float = 8.0,
     soil_cover_m: float = 0.0,
+    cluster_gap_m: float = PEAK_MERGE_DISTANCE_M,
 ) -> List[dict]:
     pga = pga_value(flow_m3s, diameter_m)
     threshold = delta_h_max_m + soil_cover_m
@@ -364,9 +398,8 @@ def identify_air_entrainment_risk_valves(
 
     slope = -np.diff(y) / np.diff(x)  # positivo = descendente en direccion del flujo (cadenamiento creciente)
     en_riesgo = slope > pga
-    deficit = np.where(slope > 0, slope - pga, -np.inf)
 
-    extra = []
+    runs = []
     n = len(en_riesgo)
     i = 0
     while i < n:
@@ -376,22 +409,33 @@ def identify_air_entrainment_risk_valves(
         j = i
         while j < n and en_riesgo[j]:
             j += 1
-        elevs = y[i : j + 1]
+        runs.append((i, j))
+        i = j
+    if not runs:
+        return []
+
+    clusters = [runs[0]]
+    for start, end in runs[1:]:
+        last_start, last_end = clusters[-1]
+        if x[start] - x[last_end] <= cluster_gap_m:
+            clusters[-1] = (last_start, end)
+        else:
+            clusters.append((start, end))
+
+    extra = []
+    for start, end in clusters:
+        elevs = y[start : end + 1]
         delta_h_real = float(elevs.max() - elevs.min())
         if delta_h_real > threshold:
-            k = i + int(np.argmax(deficit[i:j]))
-            chainage_mid = float((x[k] + x[k + 1]) / 2)
-            elevation_mid = float(np.interp(chainage_mid, x, y))
             extra.append(
                 {
-                    "chainage_m": chainage_mid,
-                    "elevation_m": elevation_mid,
-                    "category": "riesgo_arrastre_aire",
+                    "chainage_m": float(x[start]),
+                    "elevation_m": float(y[start]),
+                    "category": "punto_alto_pga",
                     "valve_type": "Combinacion",
                     "source": "pga_wang",
                 }
             )
-        i = j
     return extra
 
 
@@ -442,6 +486,7 @@ def build_valve_locations(
     candidates = classify_breakpoints(simplified_df)
     if diameter_m is not None:
         candidates.extend(identify_geometric_peaks(full_df, diameter_m))
+    candidates = consolidate_nearby_peaks(candidates)
 
     x_start = float(full_df["chainage_m"].iloc[0])
     x_end = float(full_df["chainage_m"].iloc[-1])
