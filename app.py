@@ -26,6 +26,7 @@ CATEGORY_LABELS = {
     "disminucion_pendiente_subida": "Disminución de pendiente en subida",
     "descarga_bombeo": "Descarga de bombeo",
     "extremo_linea": "Extremo de línea (adyacente a desfogue)",
+    "riesgo_arrastre_aire": "Riesgo de arrastre de aire (PGA, UNAM) + descompresión (Wang et al. 2023)",
     "periodico_ascenso": "Punto periódico — ascenso largo",
     "periodico_horizontal": "Punto periódico — tramo horizontal",
     "periodico_descenso": "Punto periódico — descenso largo",
@@ -280,6 +281,19 @@ with st.form("parametros_form"):
         espesor_val, espesor_unit = number_with_unit("Espesor de pared", 6.0, ["mm", "in"], "mm", "espesor", min_value=0.01)
         factor_seguridad = col_sf.number_input("Factor de seguridad", value=4.0, min_value=2.0, max_value=6.0, step=0.5)
 
+    with st.expander("Avanzado: riesgo de arrastre de aire + descompresión tras rotura (UNAM + Wang et al. 2023)"):
+        st.caption(
+            "Identifica tramos descendentes donde el flujo no alcanza velocidad suficiente para arrastrar aire "
+            "hacia aguas abajo (parámetro de gasto adimensional PGA = Q²/(g·D⁵) menor que la pendiente del tubo, "
+            "UNAM Ec. 3.6). Dentro de esos tramos, si el desnivel acumulado supera el valor de control de vacío "
+            "tras una rotura de tubería (Wang et al. 2023, Ec. 9-11), se agrega una válvula intermedia en el punto "
+            "más crítico. Solo actúa sobre tramos realmente en riesgo, no sobre todo el perfil."
+        )
+        usar_wang = st.checkbox("Activar verificación de riesgo de arrastre de aire", value=False)
+        col_dh, col_sc = st.columns(2)
+        delta_h_max_m = col_dh.number_input("ΔH máx. de control de vacío (m)", value=8.0, min_value=1.0, help="Valor típico según Wang et al. (2023).")
+        soil_cover_m = col_sc.number_input("Recubrimiento de suelo si es enterrada (m)", value=0.0, min_value=0.0)
+
     submitted = st.form_submit_button("▶ Calcular", use_container_width=True)
 
 if not submitted and "results" not in st.session_state:
@@ -313,6 +327,10 @@ if submitted:
         drain_chainages=drain_chainages,
         spacing_m=float(spacing_m),
         slope_tolerance_m=float(slope_tolerance_m),
+        delta_h_max_m=float(delta_h_max_m) if usar_wang else None,
+        soil_cover_m=float(soil_cover_m),
+        flow_m3s=flow_m3s,
+        diameter_m=diameter_m,
     )
 
     manning_n = MANNING_N_BY_MATERIAL[material]
@@ -477,3 +495,27 @@ else:
         profile_df, hgl_series=hgl_full, valve_df=results_df, drain_points=state.get("drain_points"), height=520
     )
     st.plotly_chart(fig, use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# Referencias técnicas
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+    <div style="font-size:11px; color:#6B7280; margin-top:24px; border-top:1px solid #E5E7EB; padding-top:10px;">
+    <strong>Referencias técnicas:</strong><br>
+    • American Water Works Association. 2016. <em>Manual of Water Supply Practices M51: Air Valves — Air-Release,
+    Air/Vacuum, and Combination</em>, 2nd ed. Denver, CO: AWWA. (Dimensionamiento de orificio, Tablas 4-1 a 4-4;
+    localización, Fig. 3-1).<br>
+    • Pozos-Estrada, O., Fairuzov, Y., Sánchez-Huerta, A., Rodal-Canales, E.A. 2012. <em>Manual de análisis de la
+    problemática del aire atrapado en acueductos para mejorar su eficiencia</em>. Serie Manuales SM13, Instituto de
+    Ingeniería, UNAM. (Localización de válvulas de aire, sec. 1.5; criterio de arrastre de burbujas Q²/gD⁵, sec. 3.2).<br>
+    • Wang, Y., Zhang, J., Xu, T., Liu, Y., Yao, T., Wang, K., Zhang, M. 2023. "Air valve arrangement criteria for
+    preventing secondary pipe bursts in long-distance gravitational water supply systems." <em>AQUA — Water
+    Infrastructure, Ecosystems and Society</em>, 72(8), 1566–1581. (Desnivel máximo admisible entre válvulas
+    adyacentes, Ec. 9-11).<br>
+    • Kalinske, A.A., Bliss, P.H. 1943. "Removal of air from pipe lines by flowing water." <em>Civil Engineering</em>,
+    13(10). (Origen del parámetro de gasto adimensional Q²/gD⁵ usado por los criterios anteriores).
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
