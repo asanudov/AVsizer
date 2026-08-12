@@ -11,7 +11,7 @@ import valve_sizing as vs
 from m51_tables import DISSOLVED_AIR_PERCENT_DEFAULT, DISSOLVED_AIR_PERCENT_OPTIONS, HAZEN_WILLIAMS_C, MANNING_N_BY_MATERIAL
 from styling import PALETTE, inject_theme
 
-st.set_page_config(page_title="AVSizer App | Dimensionamiento y Localización de Válvulas de admisión y Expulsión de aire", layout="wide", page_icon="💧")
+st.set_page_config(page_title="Dimensionamiento de Válvulas de Aire — AWWA M51", layout="wide", page_icon="💧")
 inject_theme()
 
 HEAD_UNITS = ["mwc", "bar", "psi", "kg/cm2"]
@@ -145,10 +145,10 @@ def render_profile_chart(profile_df, hgl_series=None, valve_df=None, drain_point
     return fig
 
 
-st.title("Dimensionamiento y localización de válvulas de aire — AWWA M51")
+st.title("AV Sizer App")
 st.caption(
-    "Calcula ubicación (cadenamiento y elevación) y diámetro de orificio de válvulas de aire para "
-    "llenado, vaciado/drenaje y purga, siguiendo la metodología del Manual AWWA M51 (2016)."
+    "Herramienta para dimensionar y localizar válvulas de admisión, expulsión y purga de aire "
+    "en líneas de conducción."
 )
 
 # ---------------------------------------------------------------------------
