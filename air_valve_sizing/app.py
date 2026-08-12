@@ -151,6 +151,10 @@ st.caption(
     "Herramienta para dimensionar y localizar válvulas de admisión, expulsión y purga de aire "
     "en líneas de conducción."
 )
+st.markdown(
+    'Creada por <a href="https://www.linkedin.com/in/alansanudo/" target="_blank">M.I. Alan Sañudo</a>',
+    unsafe_allow_html=True,
+)
 
 # ---------------------------------------------------------------------------
 # 1. Carga y mapeo del perfil
