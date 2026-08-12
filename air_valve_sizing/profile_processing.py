@@ -11,10 +11,13 @@ de valvulas de aire segun tres criterios complementarios:
    tramos descendentes mediante el parametro de gasto adimensional PGA =
    Q^2/(g*D^5) comparado con la pendiente del tubo (sec. 3.2, Ec. 3.6).
 3. Wang et al. (2023, "Air valve arrangement criteria for preventing secondary
-   pipe bursts..."): dentro de un tramo descendente en riesgo (criterio 2),
-   si el desnivel acumulado supera el valor de control de vacio maximo tras
-   una rotura de tuberia (Ec. 9-11), se propone una valvula intermedia en el
-   punto mas critico del tramo.
+   pipe bursts..."): analisis INDEPENDIENTE del anterior. Sobre la lista final
+   de valvulas (las que ya resulten de 1 y 2), revisa el desnivel entre cada
+   par de valvulas adyacentes -incluyendo el punto bajo intermedio del perfil
+   completo- y si supera el valor de control de vacio maximo tras una rotura
+   de tuberia (Ec. 9-11), agrega una valvula en ese punto bajo intermedio.
+   No depende del criterio de PGA: una rotura en un punto bajo es un riesgo
+   aparte de que el flujo arrastre o no burbujas en operacion normal.
 
 La simplificacion RDP se usa SOLO para decidir donde hay quiebres de
 pendiente relevantes; la elevacion de cada valvula sugerida siempre se
@@ -40,6 +43,7 @@ CATEGORY_PRIORITY = {
     "aumento_pendiente_bajada": 70,
     "disminucion_pendiente_subida": 70,
     "extremo_linea": 60,
+    "punto_bajo_rotura": 55,
     "periodico_ascenso": 40,
     "periodico_horizontal": 40,
     "periodico_descenso": 40,
@@ -336,23 +340,11 @@ def assign_drain_crests(candidates: List[dict], full_df: pd.DataFrame, drain_cha
 
 
 # ---------------------------------------------------------------------------
-# Riesgo de arrastre de aire (PGA, Gonzalez y Pozos 2000 / UNAM Ec. 3.6) +
-# proteccion contra ondas de descompresion tras rotura (Wang et al. 2023,
-# Ec. 9-11), combinados igual que en la herramienta de referencia del
-# usuario: primero se identifican los TRAMOS DESCENDENTES donde el flujo no
-# tiene velocidad suficiente para arrastrar burbujas/bolsas de aire hacia
-# aguas abajo (parametro de gasto adimensional PGA = Q^2/(g*D^5) menor que
-# la pendiente S del tubo -> el aire puede migrar hacia aguas arriba y
-# acumularse). Los tramos en riesgo separados por menos de
-# PEAK_MERGE_DISTANCE_M se agrupan en un solo cluster (dos "tramos rojos"
-# cercanos cuentan como uno). Dentro de cada cluster, si el desnivel
-# acumulado supera el valor de control de vacio maximo tras una rotura
-# (tipicamente 8 m + recubrimiento de suelo), se propone UNA valvula en el
-# INICIO del primer tramo en riesgo del cluster (aguas arriba de donde
-# comienza el riesgo), no en un punto intermedio: esa es la ubicacion que
-# realmente intercepta el aire antes de que se acumule. Esto evita agregar
-# valvulas en tramos ascendentes u horizontales, que ya estan cubiertos por
-# las reglas del M51.
+# Riesgo de arrastre de aire (PGA, Gonzalez y Pozos 2000 / UNAM Ec. 3.6):
+# identifica TRAMOS DESCENDENTES donde el flujo no tiene velocidad suficiente
+# para arrastrar burbujas/bolsas de aire hacia aguas abajo (PGA = Q^2/(g*D^5)
+# menor que la pendiente S del tubo -> el aire puede migrar hacia aguas
+# arriba y acumularse). Es un analisis INDEPENDIENTE del de Wang (mas abajo).
 # ---------------------------------------------------------------------------
 def pga_value(flow_m3s: float, diameter_m: float) -> float:
     """Parametro de gasto adimensional PGA = Q^2/(g*D^5) (Gonzalez y Pozos
@@ -380,23 +372,24 @@ def compute_pga_risk_segments(
     ]
 
 
-def identify_air_entrainment_risk_valves(
+def identify_pga_valve_points(
     full_df: pd.DataFrame,
     flow_m3s: float,
     diameter_m: float,
-    delta_h_max_m: float = 8.0,
-    soil_cover_m: float = 0.0,
     cluster_gap_m: float = PEAK_MERGE_DISTANCE_M,
 ) -> List[dict]:
+    """Propone una valvula en el INICIO de cada agrupacion de tramos en
+    riesgo de arrastre de aire (PGA): dos tramos rojos separados por menos
+    de cluster_gap_m se tratan como uno solo y generan una unica valvula, en
+    el inicio del primero (aguas arriba de donde comienza el riesgo), que es
+    la ubicacion que realmente intercepta el aire antes de que se acumule."""
     pga = pga_value(flow_m3s, diameter_m)
-    threshold = delta_h_max_m + soil_cover_m
-
     x = full_df["chainage_m"].to_numpy()
     y = full_df["elevation_m"].to_numpy()
     if len(x) < 3:
         return []
 
-    slope = -np.diff(y) / np.diff(x)  # positivo = descendente en direccion del flujo (cadenamiento creciente)
+    slope = -np.diff(y) / np.diff(x)
     en_riesgo = slope > pga
 
     runs = []
@@ -422,18 +415,56 @@ def identify_air_entrainment_risk_valves(
         else:
             clusters.append((start, end))
 
+    return [
+        {
+            "chainage_m": float(x[start]),
+            "elevation_m": float(y[start]),
+            "category": "punto_alto_pga",
+            "valve_type": "Combinacion",
+            "source": "pga",
+        }
+        for start, end in clusters
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Wang et al. (2023), Ec. 9-11: proteccion contra ondas de descompresion tras
+# una ROTURA EN UN PUNTO BAJO. Analisis INDEPENDIENTE del de PGA: opera sobre
+# la lista FINAL de valvulas ya ubicadas (por M51, desfogues y/o PGA si esta
+# activo). Para cada par de valvulas adyacentes, si el desnivel entre ellas
+# -incluyendo el punto bajo intermedio del perfil completo- supera el valor
+# de control de vacio maximo tras una rotura (tipicamente 8 m + recubrimiento
+# de suelo), se agrega una valvula en ese punto bajo intermedio.
+# ---------------------------------------------------------------------------
+def identify_wang_intermediate_valves(
+    candidates: List[dict], full_df: pd.DataFrame, delta_h_max_m: float = 8.0, soil_cover_m: float = 0.0
+) -> List[dict]:
+    if len(candidates) < 2:
+        return []
+    threshold = delta_h_max_m + soil_cover_m
+    ordered = sorted(candidates, key=lambda c: c["chainage_m"])
+
     extra = []
-    for start, end in clusters:
-        elevs = y[start : end + 1]
-        delta_h_real = float(elevs.max() - elevs.min())
-        if delta_h_real > threshold:
+    for a, b in zip(ordered[:-1], ordered[1:]):
+        seg = full_df[(full_df["chainage_m"] >= a["chainage_m"]) & (full_df["chainage_m"] <= b["chainage_m"])]
+        if len(seg) < 2:
+            continue
+        seg_max_e = float(seg["elevation_m"].max())
+        seg_min_e = float(seg["elevation_m"].min())
+        gap = max(a["elevation_m"], b["elevation_m"], seg_max_e) - min(a["elevation_m"], b["elevation_m"], seg_min_e)
+        if gap <= threshold:
+            continue
+        idx_min = seg["elevation_m"].idxmin()
+        chainage_low = float(seg.loc[idx_min, "chainage_m"])
+        elevation_low = float(seg.loc[idx_min, "elevation_m"])
+        if a["chainage_m"] < chainage_low < b["chainage_m"]:
             extra.append(
                 {
-                    "chainage_m": float(x[start]),
-                    "elevation_m": float(y[start]),
-                    "category": "punto_alto_pga",
+                    "chainage_m": chainage_low,
+                    "elevation_m": elevation_low,
+                    "category": "punto_bajo_rotura",
                     "valve_type": "Combinacion",
-                    "source": "pga_wang",
+                    "source": "wang_rotura",
                 }
             )
     return extra
@@ -473,7 +504,9 @@ def build_valve_locations(
     spacing_m: float = 500.0,
     slope_tolerance_m: float = DEFAULT_SLOPE_TOLERANCE_M,
     target_vertices_per_km: float = DEFAULT_TARGET_VERTICES_PER_KM,
-    delta_h_max_m: Optional[float] = None,
+    enable_pga: bool = False,
+    enable_wang: bool = False,
+    delta_h_max_m: float = 8.0,
     soil_cover_m: float = 0.0,
     flow_m3s: Optional[float] = None,
     diameter_m: Optional[float] = None,
@@ -507,11 +540,15 @@ def build_valve_locations(
     candidates.extend(insert_periodic_valves(full_df, boundary_chainages, spacing_m))
 
     candidates = assign_drain_crests(candidates, full_df, drain_chainages)
-    if delta_h_max_m is not None and flow_m3s is not None and diameter_m is not None:
-        candidates.extend(
-            identify_air_entrainment_risk_valves(full_df, flow_m3s, diameter_m, delta_h_max_m, soil_cover_m)
-        )
+
+    if enable_pga and flow_m3s is not None and diameter_m is not None:
+        candidates.extend(identify_pga_valve_points(full_df, flow_m3s, diameter_m))
     candidates = merge_close_points(candidates, DEDUP_SPACING_M)
+
+    if enable_wang:
+        candidates.extend(identify_wang_intermediate_valves(candidates, full_df, delta_h_max_m, soil_cover_m))
+        candidates = merge_close_points(candidates, DEDUP_SPACING_M)
+
     candidates.sort(key=lambda c: c["chainage_m"])
 
     result_df = pd.DataFrame(candidates)

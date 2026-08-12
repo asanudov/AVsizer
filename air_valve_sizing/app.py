@@ -27,6 +27,7 @@ CATEGORY_LABELS = {
     "descarga_bombeo": "Descarga de bombeo",
     "extremo_linea": "Extremo de línea (adyacente a desfogue)",
     "punto_alto_pga": "Punto alto / PGA",
+    "punto_bajo_rotura": "Punto bajo / Rotura (Wang et al. 2023)",
     "periodico_ascenso": "Punto periódico — ascenso largo",
     "periodico_horizontal": "Punto periódico — tramo horizontal",
     "periodico_descenso": "Punto periódico — descenso largo",
@@ -326,20 +327,21 @@ with st.form("parametros_form"):
 
     with st.expander("Avanzado: riesgo de arrastre de aire (UNAM) y válvulas por rotura en puntos bajos (Wang et al. 2023)"):
         st.caption(
-            "Son dos análisis independientes, actívelos por separado según lo que necesite ver."
+            "Son dos análisis INDEPENDIENTES entre sí — cada uno puede activarse solo, o los dos juntos."
         )
         usar_pga_visual = st.checkbox(
-            "Analizar riesgo de arrastre de aire (PGA) — resalta en rojo los tramos descendentes donde el flujo no "
-            "alcanza velocidad suficiente para arrastrar el aire hacia aguas abajo (parámetro de gasto adimensional "
-            "PGA = Q²/(g·D⁵) menor que la pendiente del tubo, UNAM Ec. 3.6). Solo diagnóstico visual, no agrega "
-            "válvulas.",
+            "Riesgo de arrastre de aire (PGA) — resalta en rojo los tramos descendentes donde el flujo no alcanza "
+            "velocidad suficiente para arrastrar el aire hacia aguas abajo (parámetro de gasto adimensional "
+            "PGA = Q²/(g·D⁵) menor que la pendiente del tubo, UNAM Ec. 3.6), y propone una válvula al inicio de "
+            "cada agrupación de tramos en riesgo (dos tramos rojos cercanos cuentan como uno).",
             value=False,
         )
         st.markdown("---")
         usar_wang = st.checkbox(
-            "Agregar válvulas intermedias por riesgo de rotura en puntos bajos (Wang et al. 2023) — dentro de los "
-            "tramos en riesgo de arrastre de aire, si el desnivel acumulado supera el valor de control de vacío "
-            "tras una rotura de tubería (Ec. 9-11), propone una válvula intermedia al inicio del tramo.",
+            "Válvulas intermedias por rotura en puntos bajos (Wang et al. 2023) — revisa el desnivel entre cada "
+            "par de válvulas ya ubicadas (por el M51, desfogues y/o PGA) y, si supera el valor de control de vacío "
+            "tras una rotura de tubería (Ec. 9-11), agrega una válvula en el punto bajo intermedio. No depende de "
+            "si hay riesgo de PGA en ese tramo.",
             value=False,
         )
         col_dh, col_sc = st.columns(2)
@@ -379,7 +381,9 @@ if submitted:
         drain_chainages=drain_chainages,
         spacing_m=float(spacing_m),
         slope_tolerance_m=float(slope_tolerance_m),
-        delta_h_max_m=float(delta_h_max_m) if usar_wang else None,
+        enable_pga=usar_pga_visual,
+        enable_wang=usar_wang,
+        delta_h_max_m=float(delta_h_max_m),
         soil_cover_m=float(soil_cover_m),
         flow_m3s=flow_m3s,
         diameter_m=diameter_m,
