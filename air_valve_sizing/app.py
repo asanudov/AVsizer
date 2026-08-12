@@ -9,7 +9,7 @@ import hydraulics as hyd
 import profile_processing as pp
 import valve_sizing as vs
 from m51_tables import DISSOLVED_AIR_PERCENT_DEFAULT, DISSOLVED_AIR_PERCENT_OPTIONS, HAZEN_WILLIAMS_C, MANNING_N_BY_MATERIAL
-from styling import PALETTE, VALVE_ICON_DATA_URI, inject_theme
+from styling import PALETTE, inject_theme
 
 st.set_page_config(page_title="Dimensionamiento de Válvulas de Aire — AWWA M51", layout="wide", page_icon="💧")
 inject_theme()
@@ -33,6 +33,20 @@ CATEGORY_LABELS = {
 }
 
 SCFM_TO_M3H = 1.699011  # 1 SCFM = 0.0283168 m3/min * 60 min/hr
+
+PRESSURE_UNITS = ["mwc", "bar", "psi"]
+
+# Pictograma de valvula de aire (mismo diseno que styling.VALVE_ICON_DATA_URI)
+# como shape de Plotly en modo pixel (xsizemode/ysizemode="pixel"): el ancla
+# (xanchor, yanchor) se ubica en el cadenamiento/elevacion real del punto y
+# el path se dibuja en offsets de PIXELES fijos desde ahi, para que el icono
+# no se deforme al hacer zoom y su base (el extremo inferior del tallo)
+# quede siempre plantada exactamente sobre la linea del perfil.
+VALVE_ICON_SHAPE_PATH = (
+    "M -3.3,-23.1 L 7.15,-23.1 L 7.15,-6.6 L -7.15,-6.6 L -7.15,-19.25 Z "
+    "M 7.7,-29.7 L 13.75,-29.7 L 13.75,-22.0 L 5.5,-22.0 L 5.5,-27.5 Z "
+    "M 0,-6.6 L 0,0"
+)
 
 
 def number_with_unit(label, default_value, units, default_unit, key, help_text=None, min_value=0.0):
@@ -81,31 +95,32 @@ def render_profile_chart(profile_df, hgl_series=None, valve_df=None, drain_point
                 )
             )
     if valve_df is not None and not valve_df.empty:
-        has_hover_info = "Tipo de válvula (Cap. 3 M51)" in valve_df.columns and "Presión de operación (psi)" in valve_df.columns
+        pressure_col = next((c for c in valve_df.columns if c.startswith("Presión de operación (")), None)
+        has_hover_info = "Tipo de válvula (Cap. 3 M51)" in valve_df.columns and pressure_col is not None
+        pressure_unit_label = pressure_col[len("Presión de operación ("):-1] if pressure_col else ""
         fig.add_trace(
             go.Scatter(
                 x=valve_df["Cadenamiento (m)"], y=valve_df["Elevación (m)"], mode="markers",
                 name="Válvulas de aire propuestas",
                 marker=dict(size=16, color="rgba(0,0,0,0)", line=dict(width=0)),
-                customdata=valve_df[["Tipo de válvula (Cap. 3 M51)", "Presión de operación (psi)"]] if has_hover_info else None,
+                customdata=valve_df[["Tipo de válvula (Cap. 3 M51)", pressure_col]] if has_hover_info else None,
                 hovertemplate=(
                     "Cadenamiento: %{x:.0f} m<br>Elevación: %{y:.2f} m"
-                    + ("<br>%{customdata[0]}<br>P. operación: %{customdata[1]:.1f} psi" if has_hover_info else "")
+                    + (f"<br>%{{customdata[0]}}<br>P. operación: %{{customdata[1]:.2f}} {pressure_unit_label}" if has_hover_info else "")
                     + "<extra></extra>"
                 ),
             )
         )
-        x_range = float(profile_df["chainage_m"].max() - profile_df["chainage_m"].min()) or 1.0
-        y_range_padded = (y_max + pad) - (y_min - pad)
-        sizex = max(x_range * 0.028, 1.0)
-        sizey = max(y_range_padded * 0.11, 0.1)
         for _, row in valve_df.iterrows():
-            fig.add_layout_image(
-                dict(
-                    source=VALVE_ICON_DATA_URI, xref="x", yref="y",
-                    x=row["Cadenamiento (m)"], y=row["Elevación (m)"],
-                    sizex=sizex, sizey=sizey, xanchor="center", yanchor="middle", layer="above",
-                )
+            fig.add_shape(
+                type="path",
+                path=VALVE_ICON_SHAPE_PATH,
+                xref="x", yref="y",
+                xsizemode="pixel", ysizemode="pixel",
+                xanchor=row["Cadenamiento (m)"], yanchor=row["Elevación (m)"],
+                line=dict(color=PALETTE["deep"], width=2),
+                fillcolor="rgba(0,0,0,0)",
+                layer="above",
             )
     if drain_points:
         fig.add_trace(
@@ -242,6 +257,11 @@ with st.form("parametros_form"):
     material = col_mat.selectbox("Material", list(HAZEN_WILLIAMS_C.keys()))
     c_hw_default = HAZEN_WILLIAMS_C[material]
     c_hw = col_c.number_input("Coeficiente Hazen-Williams (C)", value=float(c_hw_default), min_value=60.0, max_value=200.0, help="Valor de diseño estándar según material; editable si se dispone de un dato específico.")
+
+    pressure_unit = st.selectbox(
+        "Unidad para mostrar la presión de operación en resultados", PRESSURE_UNITS, index=0,
+        help="Se calcula internamente en las tres unidades; esta elige cuál se muestra en la tabla y el gráfico.",
+    )
 
     dissolved_air_pct = st.select_slider(
         "% de aire disuelto para dimensionamiento de purga",
@@ -403,11 +423,10 @@ if submitted:
                 "Caudal de purga (m³/hr)": purge.required_scfm * SCFM_TO_M3H,
                 "Ø Purga (in)": purge.diameter_in,
                 "Ø Purga (mm)": purge.diameter_in * 25.4,
-                "Presión de operación (mwc)": delta_p_purge_m,
-                "Presión de operación (bar)": delta_p_purge_m / hyd.HEAD_TO_M["bar"],
-                "Presión de operación (psi)": delta_p_purge_m / hyd.HEAD_TO_M["psi"],
+                f"Presión de operación ({pressure_unit})": hyd.m_to_head(delta_p_purge_m, pressure_unit),
                 "HGL (m)": hgl_at_point,
                 "_source": r["source"],
+                "_pressure_mwc": delta_p_purge_m,
                 "_fill_m3h": fill.required_scfm * SCFM_TO_M3H,
                 "_drain_m3h": drain.required_scfm * SCFM_TO_M3H,
                 "_fill_exceeds": fill.exceeds_largest,
@@ -463,6 +482,7 @@ else:
     display_df = results_df.drop(columns=[c for c in results_df.columns if c.startswith("_") and c != "_desfogues"]).rename(
         columns={"_desfogues": "Desfogues asociados (m)"}
     )
+    pressure_decimals = {"mwc": "{:.1f}", "bar": "{:.2f}", "psi": "{:.1f}"}[pressure_unit]
     st.dataframe(
         display_df.style.format(
             {
@@ -472,16 +492,15 @@ else:
                 "Caudal de purga (m³/hr)": "{:.2f}",
                 "Ø Purga (in)": "{:.3f}",
                 "Ø Purga (mm)": "{:.1f}",
-                "Presión de operación (mwc)": "{:.1f}",
-                "Presión de operación (bar)": "{:.2f}",
-                "Presión de operación (psi)": "{:.1f}",
+                f"Presión de operación ({pressure_unit})": pressure_decimals,
+                "HGL (m)": "{:.1f}",
             }
         ),
         use_container_width=True,
         height=min(60 + 35 * len(display_df), 520),
     )
 
-    if (results_df["Presión de operación (mwc)"] < 0).any():
+    if (results_df["_pressure_mwc"] < 0).any():
         st.markdown(
             '<div class="wv-banner">⚠️ Uno o más puntos quedan por encima de la línea de energía '
             "(presión de operación negativa): esa sección de la línea no tendría carga suficiente "
