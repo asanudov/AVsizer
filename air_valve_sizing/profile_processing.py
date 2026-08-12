@@ -75,32 +75,58 @@ def _rdp_keep_indices(x: np.ndarray, y: np.ndarray, tolerance: float) -> List[in
     return np.nonzero(keep)[0].tolist()
 
 
+DEFAULT_SLOPE_TOLERANCE_M = 0.5  # filtra ruido/redondeo tipico de topografia (p.ej. cotas a metro entero)
+DEFAULT_TARGET_VERTICES_PER_KM = 12.0  # densidad objetivo de vertices tras simplificar, independiente del muestreo del CSV
+MIN_TARGET_VERTICES = 15
+MAX_TARGET_VERTICES = 250
+
+
 def simplify_profile(
-    df: pd.DataFrame, max_points: int = 300, target_range: "tuple[int, int]" = (100, 250)
+    df: pd.DataFrame,
+    base_tolerance_m: float = DEFAULT_SLOPE_TOLERANCE_M,
+    target_vertices_per_km: float = DEFAULT_TARGET_VERTICES_PER_KM,
 ) -> "tuple[pd.DataFrame, bool]":
-    """Si el perfil tiene mas de max_points, lo reduce con RDP (busqueda
-    binaria de tolerancia) hasta caer dentro de target_range vertices.
-    Devuelve (perfil_para_clasificar, se_simplifico)."""
-    if len(df) <= max_points:
+    """Simplifica el perfil con RDP para filtrar ruido/redondeo de la
+    topografia (quiebres de pendiente espurios) y quedarse solo con quiebres
+    de pendiente realmente significativos, sin importar cuantos puntos ni
+    que tan seguido esten muestreados en el CSV original.
+
+    Primero se aplica una pasada base con base_tolerance_m (tolerancia
+    minima). La densidad de vertices resultante se limita ademas segun la
+    longitud de la linea (target_vertices_per_km): si el perfil es denso o
+    "ruidoso" y aun asi quedan demasiados vertices para esa longitud, se
+    sube la tolerancia adaptativamente (busqueda binaria) hasta acercarse al
+    objetivo. Devuelve (perfil_para_clasificar, se_redujo_el_numero_de_puntos).
+    """
+    if len(df) < 3:
         return df.reset_index(drop=True), False
 
     x = df["chainage_m"].to_numpy()
     y = df["elevation_m"].to_numpy()
-    elev_range = max(float(y.max() - y.min()), 1.0)
-    tol_lo, tol_hi = 0.001, elev_range
-    idx = list(range(len(df)))
-    for _ in range(40):
-        tol_mid = (tol_lo + tol_hi) / 2
-        idx = _rdp_keep_indices(x, y, tol_mid)
-        n = len(idx)
-        if target_range[0] <= n <= target_range[1]:
-            break
-        if n > target_range[1]:
-            tol_lo = tol_mid
-        else:
-            tol_hi = tol_mid
+
+    line_length_km = max((x[-1] - x[0]) / 1000.0, 0.001)
+    target_hi = int(np.clip(round(line_length_km * target_vertices_per_km), MIN_TARGET_VERTICES, MAX_TARGET_VERTICES))
+    target_hi = min(target_hi, len(df))
+    target_lo = max(5, target_hi // 2)
+
+    idx = _rdp_keep_indices(x, y, base_tolerance_m)
+
+    if len(idx) > target_hi:
+        elev_range = max(float(y.max() - y.min()), 1.0)
+        tol_lo, tol_hi = base_tolerance_m, elev_range
+        for _ in range(40):
+            tol_mid = (tol_lo + tol_hi) / 2
+            idx = _rdp_keep_indices(x, y, tol_mid)
+            n = len(idx)
+            if target_lo <= n <= target_hi:
+                break
+            if n > target_hi:
+                tol_lo = tol_mid
+            else:
+                tol_hi = tol_mid
+
     simplified = df.iloc[idx].reset_index(drop=True)
-    return simplified, True
+    return simplified, len(simplified) < len(df)
 
 
 # ---------------------------------------------------------------------------
@@ -270,10 +296,13 @@ def build_valve_locations(
     drain_chainages: Optional[List[float]] = None,
     spacing_m: float = 500.0,
     min_spacing_m: float = 50.0,
-    max_points_before_simplify: int = 300,
+    slope_tolerance_m: float = DEFAULT_SLOPE_TOLERANCE_M,
+    target_vertices_per_km: float = DEFAULT_TARGET_VERTICES_PER_KM,
 ) -> "tuple[pd.DataFrame, bool]":
     drain_chainages = drain_chainages or []
-    simplified_df, was_simplified = simplify_profile(full_df, max_points=max_points_before_simplify)
+    simplified_df, was_simplified = simplify_profile(
+        full_df, base_tolerance_m=slope_tolerance_m, target_vertices_per_km=target_vertices_per_km
+    )
 
     candidates = classify_breakpoints(simplified_df)
 

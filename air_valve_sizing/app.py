@@ -75,11 +75,33 @@ if uploaded_file is None:
     st.info("Cargue un archivo .csv con el perfil de la conducción para continuar.")
     st.stop()
 
+def _decode_csv_bytes(raw_bytes: bytes) -> str:
+    """Prueba UTF-8 y, si falla, codificaciones típicas de CSV exportados desde
+    Excel en Windows en español (cp1252/latin-1) antes de rendirse."""
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return raw_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw_bytes.decode("latin-1", errors="replace")
+
+
+def _parse_csv_text(text: str) -> pd.DataFrame:
+    for sep in (None, ";", ",", "\t"):
+        try:
+            df = pd.read_csv(io.StringIO(text), sep=sep, engine="python")
+            if df.shape[1] >= 2:
+                return df
+        except Exception:
+            continue
+    raise ValueError("No se pudo interpretar el archivo: revise que sea un .csv con columnas separadas por coma, punto y coma o tabulador.")
+
+
 try:
-    raw_df = pd.read_csv(uploaded_file, sep=None, engine="python")
-except Exception:
-    uploaded_file.seek(0)
-    raw_df = pd.read_csv(uploaded_file, sep=";")
+    raw_df = _parse_csv_text(_decode_csv_bytes(uploaded_file.getvalue()))
+except Exception as exc:
+    st.error(f"No se pudo leer el archivo cargado: {exc}")
+    st.stop()
 
 # Manejo de coma decimal (formato es-LA) en columnas que deberían ser numéricas
 for col in raw_df.columns:
