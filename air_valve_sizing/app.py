@@ -163,9 +163,9 @@ st.header("1. Perfil de la conducción")
 
 with st.expander("Formato esperado del archivo .csv", expanded=False):
     st.markdown(
-        "El archivo debe tener al menos dos columnas numéricas: **cadenamiento** (m) y "
-        "**elevación** (m), en cualquier orden y con cualquier nombre de encabezado — se piden "
-        "a continuación. Puede descargar un perfil de ejemplo para probar la app."
+        "El archivo .csv debe tener al menos dos columnas numéricas: **cadenamiento** (m) y "
+        "**elevación** (m). Una vez cargado, puedes seleccionar cuáles columnas representan los "
+        "datos necesarios."
     )
     try:
         with open("sample_profile.csv", "rb") as f:

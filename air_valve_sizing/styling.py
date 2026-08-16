@@ -46,8 +46,16 @@ def inject_theme() -> None:
             font-style: normal;
         }}
 
-        html, body, [class*="css"], .stMarkdown, .stButton, .stDataFrame, table {{
+        html, body, [class*="css"], .stMarkdown, .stButton, .stDataFrame, table,
+        p, span, div, label, li, a, button, input, textarea, select {{
             font-family: 'Space Grotesk', sans-serif !important;
+        }}
+
+        /* Los iconos de Streamlit (flechas de expander, ayuda "?", etc.) usan una
+           fuente de iconos por ligatura de texto: deben quedar excluidos de la
+           regla anterior o se veria el nombre del icono en vez del glifo. */
+        [data-testid="stIconMaterial"] {{
+            font-family: 'Material Symbols Rounded' !important;
         }}
 
         h1, h2, h3, h4 {{
