@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -11,7 +12,10 @@ import valve_sizing as vs
 from m51_tables import DISSOLVED_AIR_PERCENT_DEFAULT, DISSOLVED_AIR_PERCENT_OPTIONS, HAZEN_WILLIAMS_C, MANNING_N_BY_MATERIAL
 from styling import PALETTE, inject_theme
 
-st.set_page_config(page_title="Dimensionamiento de Válvulas de Aire — AWWA M51", layout="wide", page_icon="💧")
+APP_DIR = Path(__file__).parent
+LOGO_PATH = APP_DIR / "assets" / "logo_avsizer.png"
+
+st.set_page_config(page_title="AV Sizer App", layout="wide", page_icon=str(LOGO_PATH))
 inject_theme()
 
 HEAD_UNITS = ["mwc", "bar", "psi", "kg/cm2"]
@@ -146,7 +150,11 @@ def render_profile_chart(profile_df, hgl_series=None, valve_df=None, drain_point
     return fig
 
 
-st.title("AV Sizer App")
+col_logo, col_title = st.columns([1, 8])
+with col_logo:
+    st.image(str(LOGO_PATH), width=90)
+with col_title:
+    st.title("AV Sizer App")
 st.caption(
     "Herramienta para dimensionar y localizar válvulas de admisión, expulsión y purga de aire "
     "en líneas de conducción."
@@ -168,7 +176,7 @@ with st.expander("Formato esperado del archivo .csv", expanded=False):
         "datos necesarios."
     )
     try:
-        with open("sample_profile.csv", "rb") as f:
+        with open(APP_DIR / "sample_profile.csv", "rb") as f:
             st.download_button("Descargar perfil de ejemplo", f, file_name="sample_profile.csv", mime="text/csv")
     except FileNotFoundError:
         pass
